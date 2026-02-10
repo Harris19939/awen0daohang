@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arch-Commander | Pro Console</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; font-family: 'JetBrains Mono', 'Fira Code', monospace; overflow: hidden; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .glass-panel { background: rgba(30, 41, 59, 0.6); backdrop-filter: blur(12px); border-right: 1px solid rgba(255,255,255,0.05); }
+        .active-item { background: rgba(56, 189, 248, 0.15); border-left: 3px solid #38bdf8; color: #38bdf8; }
+        .input-dark { background: #1e293b; border: 1px solid #334155; color: white; outline: none; transition: all 0.2s; }
+        .input-dark:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2); }
+        .blur-text { filter: blur(4px); user-select: none; transition: filter 0.2s; }
+        .blur-text:hover { filter: blur(0); }
+        .password-container { display: flex; align-items: flex-start; gap: 12px; }
+        .password-text { flex: 1; word-break: break-all; min-width: 0; line-height: 1.6; }
+        .copy-btn { flex-shrink: 0; position: sticky; top: 0; }
+        .notes-textarea { width: 100%; min-height: 150px; resize: vertical; max-height: 400px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <div id="app" class="flex h-screen w-screen">
+        <aside class="w-1/4 min-w-[300px] glass-panel flex flex-col h-full border-r border-slate-700">
+            <div class="p-6 border-b border-slate-700">
+                <div class="flex items-center justify-between mb-4">
+                    <h1 class="text-xl font-bold tracking-wider text-sky-400"><i class="fas fa-terminal mr-2"></i>NAV_PRO_V2</h1>
+                    <button @click="createNew" class="px-3 py-1 bg-sky-600 hover:bg-sky-500 rounded text-xs text-white transition-colors">
+                        <i class="fas fa-plus mr-1"></i>添加
+                    </button>
+                </div>
+                <div class="relative">
+                    <input type="text" v-model="searchQuery" placeholder="搜索名称/URL/备注/账号..." 
+                           class="w-full bg-slate-800 text-sm px-4 py-2 rounded text-slate-300 focus:outline-none focus:ring-1 focus:ring-sky-500">
+                    <i class="fas fa-search absolute right-3 top-2.5 text-slate-500"></i>
+                </div>
+                <div v-if="searchQuery && filteredSearchResults.length > 0" class="mt-2 text-xs text-sky-400">
+                    <i class="fas fa-search mr-1"></i>找到 {{ filteredSearchResults.length }} 条结果
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
+                <div v-if="searchQuery && filteredSearchResults.length > 0" class="bg-slate-800/50 rounded-lg p-3">
+                    <h4 class="text-xs text-amber-400 mb-2 font-bold">搜索结果</h4>
+                    <div v-for="item in filteredSearchResults" :key="item.id" @click="selectTool(item)"
+                         class="p-2 rounded cursor-pointer hover:bg-slate-700 transition-colors mb-1 text-sm">
+                        <span class="text-white">{{ item.name }}</span>
+                        <span class="text-xs text-slate-500 ml-2">{{ item.category || '未分类' }}</span>
+                    </div>
+                </div>
+
+                <div v-for="(category, categoryName) in categorizedTools" :key="categoryName">
+                    <div class="category-item mb-2" v-show="!searchQuery">
+                        <div class="category-header bg-slate-800/50 px-3 py-2 rounded-t-lg flex justify-between items-center">
+                            <h3 class="font-medium text-slate-300" @click="toggleCategory(categoryName)">
+                                <i v-if="expandedCategories.includes(categoryName)" class="fas fa-chevron-down mr-2 text-xs"></i>
+                                <i v-else class="fas fa-chevron-right mr-2 text-xs"></i>
+                                {{ categoryName }}
+                                <span class="text-xs text-slate-500 ml-2">({{ category.length }})</span>
+                            </h3>
+                        </div>
+                        <div v-show="expandedCategories.includes(categoryName)" class="bg-slate-800/30 rounded-b-lg">
+                            <div v-for="item in category" :key="item.id" @click="selectTool(item)"
+                                 class="p-3 rounded cursor-pointer hover:bg-slate-800 transition-colors flex justify-between items-center group"
+                                 :class="{ 'active-item': currentTool && currentTool.id === item.id }">
+                                <div>
+                                    <span class="block font-medium">{{ item.name }}</span>
+                                    <span class="text-xs text-slate-500 truncate max-w-[150px]">{{ item.url }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="p-3 bg-slate-900 text-xs text-slate-500 flex justify-between items-center">
+                <span>Total: {{ tools.length }}</span>
+                <div class="flex gap-3">
+                    <span class="cursor-pointer hover:text-green-400" @click="triggerImport"><i class="fas fa-upload"></i> 导入</span>
+                    <span class="cursor-pointer hover:text-green-400" @click="exportData"><i class="fas fa-download"></i> 导出</span>
+                </div>
+            </div>
+            <input type="file" ref="fileInput" @change="handleFileUpload" accept=".json" style="display: none;">
+        </aside>
+
+        <main class="flex-1 bg-slate-900 flex flex-col relative">
+            <div v-if="currentTool" class="h-full flex flex-col">
+                <header class="h-16 border-b border-slate-800 flex items-center justify-between px-8 bg-slate-900/50">
+                    <h2 class="text-2xl font-bold text-white">
+                        <span v-if="!isEditing">{{ currentTool.name }}</span>
+                        <input v-else v-model="editForm.name" class="bg-transparent border-b border-sky-500 focus:outline-none text-white" placeholder="资源名称">
+                    </h2>
+                    <div class="flex gap-3">
+                        <button v-if="!isEditing" @click="toggleEdit" class="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-sm text-sky-400 border border-slate-700">
+                            <i class="fas fa-pen mr-2"></i>编辑
+                        </button>
+                        <button v-if="!isEditing" @click="deleteTool" class="px-4 py-1.5 bg-slate-800 hover:bg-red-900/30 rounded text-sm text-red-400 border border-slate-700">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                        <button v-if="isEditing" @click="saveTool" class="px-4 py-1.5 bg-sky-600 hover:bg-sky-500 rounded text-sm text-white font-bold">
+                            <i class="fas fa-save mr-2"></i>保存
+                        </button>
+                        <button v-if="isEditing" @click="cancelEdit" class="px-4 py-1.5 hover:text-white text-slate-400 text-sm">
+                            取消
+                        </button>
+                    </div>
+                </header>
+
+                <div class="p-8 max-w-4xl mx-auto w-full space-y-8">
+                    <div v-if="!isEditing" class="grid grid-cols-1 gap-6 animate-fade-in">
+                        <div class="bg-slate-800/50 p-6 rounded-xl border border-slate-700">
+                            <label class="text-xs text-sky-500 font-bold uppercase tracking-wider mb-2 block">Target Link</label>
+                            <div class="flex items-center gap-4">
+                                <a :href="currentTool.url" target="_blank" class="text-xl text-white hover:underline truncate flex-1">
+                                    {{ currentTool.url }} <i class="fas fa-external-link-alt text-sm ml-1 opacity-50"></i>
+                                </a>
+                                <button @click="copyToClip(currentTool.url)" class="text-slate-400 hover:text-white"><i class="far fa-copy"></i></button>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-6">
+                            <div class="bg-slate-800/50 p-6 rounded-xl border border-slate-700">
+                                <label class="text-xs text-emerald-500 font-bold uppercase tracking-wider mb-2 block">Username / ID</label>
+                                <div class="flex justify-between">
+                                    <span class="text-lg text-slate-200">{{ currentTool.username || '---' }}</span>
+                                    <button @click="copyToClip(currentTool.username)" class="text-slate-400 hover:text-white"><i class="far fa-copy"></i></button>
+                                </div>
+                            </div>
+                            <div class="bg-slate-800/50 p-6 rounded-xl border border-slate-700 relative overflow-hidden group">
+                                <label class="text-xs text-rose-500 font-bold uppercase tracking-wider mb-2 block">Password / Token</label>
+                                <div class="password-container">
+                                    <span class="password-text text-lg text-slate-200 font-mono blur-text cursor-help">{{ currentTool.password || '---' }}</span>
+                                    <button @click="copyToClip(currentTool.password)" class="copy-btn text-slate-400 hover:text-white"><i class="far fa-copy"></i></button>
+                                </div>
+                                <div class="absolute inset-0 bg-rose-500/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-6">
+                            <div class="bg-slate-800/50 p-6 rounded-xl border border-slate-700">
+                                <label class="text-xs text-amber-500 font-bold uppercase tracking-wider mb-2 block">Category</label>
+                                <span class="text-lg text-slate-200">{{ currentTool.category || '未分类' }}</span>
+                            </div>
+                            <div class="bg-slate-800/50 p-6 rounded-xl border border-slate-700">
+                                <label class="text-xs text-violet-500 font-bold uppercase tracking-wider mb-2 block">System Notes</label>
+                                <p class="text-slate-300 whitespace-pre-wrap leading-relaxed">{{ currentTool.notes || '暂无备注信息...' }}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div v-else class="space-y-6">
+                        <div class="grid grid-cols-1 gap-1">
+                            <label class="text-xs text-slate-400">资源链接 (URL)</label>
+                            <input v-model="editForm.url" type="text" class="input-dark w-full p-3 rounded-lg font-mono">
+                        </div>
+                        <div class="grid grid-cols-2 gap-6">
+                            <div>
+                                <label class="text-xs text-slate-400">账号 (User)</label>
+                                <input v-model="editForm.username" type="text" class="input-dark w-full p-3 rounded-lg">
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-400">密码 (Password)</label>
+                                <input v-model="editForm.password" type="text" class="input-dark w-full p-3 rounded-lg font-mono">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 gap-1 relative">
+                            <label class="text-xs text-slate-400">分类 (Category)</label>
+                            <input 
+                                v-model="editForm.category" 
+                                type="text" 
+                                class="input-dark w-full p-3 rounded-lg" 
+                                placeholder="输入或选择分类"
+                                @focus="showCategoryDropdown = true"
+                                @blur="hideCategoryDropdown"
+                                @keydown.enter.prevent="selectCategory(editForm.category)"
+                                @keydown.down.prevent="navigateCategory(1)"
+                                @keydown.up.prevent="navigateCategory(-1)"
+                            >
+                            <div v-if="showCategoryDropdown && filteredCategories.length > 0" 
+                                 class="absolute z-50 w-full bg-slate-800 border border-slate-600 rounded-lg mt-1 max-h-48 overflow-y-auto shadow-xl">
+                                <div v-for="(cat, idx) in filteredCategories" :key="cat"
+                                     class="px-4 py-2 cursor-pointer"
+                                     :class="{ 'bg-sky-600 text-white': idx === categoryNavIndex, 'hover:bg-slate-700': idx !== categoryNavIndex }"
+                                     @mousedown.prevent="selectCategory(cat)">
+                                    {{ cat }}
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-xs text-slate-400">备注 (Notes)</label>
+                            <textarea v-model="editForm.notes" rows="5" class="notes-textarea input-dark p-3 rounded-lg"></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div v-else class="flex-1 flex flex-col items-center justify-center text-slate-600">
+                <i class="fas fa-cube text-6xl mb-4 opacity-20"></i>
+                <p>选择左侧资源或添加一个新条目</p>
+                <p class="text-sm opacity-50 mt-2">数据自动保存到本地存储</p>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted } = Vue;
+        
+        // 配置：修改为你的 Cloudflare Worker 地址
+        const API_URL = 'https://your-worker.your-username.workers.dev';
+        
+        // 云端同步函数
+        async function fetchFromCloud() {
+            try {
+                const res = await fetch(`${API_URL}/data`);
+                if (res.ok) {
+                    const data = await res.json();
+                    localStorage.setItem('arch_tools_pro', JSON.stringify(data));
+                    return data;
+                }
+            } catch (e) {
+                console.log('云端获取失败，使用本地数据');
+            }
+            return null;
+        }
+        
+        async function saveToCloud(data) {
+            try {
+                const res = await fetch(`${API_URL}/save`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                return res.ok;
+            } catch (e) {
+                console.log('云端保存失败');
+                return false;
+            }
+        }
+        
+        createApp({
+            setup() {
+                const tools = ref([]);
+                const searchQuery = ref('');
+                const currentTool = ref(null);
+                const isEditing = ref(false);
+                const editForm = ref({});
+                const expandedCategories = ref(['工作', '开发']);
+                const fileInput = ref(null);
+                const showCategoryDropdown = ref(false);
+                const categoryNavIndex = ref(0);
+                
+                // 获取所有已有分类
+                const allCategories = computed(() => {
+                    const cats = new Set(tools.value.map(t => t.category).filter(c => c));
+                    return Array.from(cats).sort();
+                });
+                
+                // 根据输入过滤分类
+                const filteredCategories = computed(() => {
+                    if (!editForm.value.category) return allCategories.value;
+                    const q = editForm.value.category.toLowerCase();
+                    return allCategories.value.filter(c => c.toLowerCase().includes(q));
+                });
+                
+                const hideCategoryDropdown = () => {
+                    setTimeout(() => { showCategoryDropdown.value = false; }, 150);
+                };
+                
+                const selectCategory = (cat) => {
+                    editForm.value.category = cat;
+                    showCategoryDropdown.value = false;
+                };
+                
+                const navigateCategory = (delta) => {
+                    const len = filteredCategories.value.length;
+                    if (len > 0) {
+                        categoryNavIndex.value = (categoryNavIndex.value + delta + len) % len;
+                    }
+                };
+                
+                const filteredSearchResults = computed(() => {
+                    if (!searchQuery.value) return [];
+                    const q = searchQuery.value.toLowerCase();
+                    return tools.value.filter(t => 
+                        (t.name && t.name.toLowerCase().includes(q)) ||
+                        (t.url && t.url.toLowerCase().includes(q)) ||
+                        (t.username && t.username.toLowerCase().includes(q)) ||
+                        (t.password && t.password.toLowerCase().includes(q)) ||
+                        (t.notes && t.notes.toLowerCase().includes(q)) ||
+                        (t.category && t.category.toLowerCase().includes(q))
+                    );
+                });
+
+                const categorizedTools = computed(() => {
+                    const result = {};
+                    tools.value.forEach(tool => {
+                        const category = tool.category || '未分类';
+                        if (!result[category]) result[category] = [];
+                        result[category].push(tool);
+                    });
+                    return result;
+                });
+
+                const saveData = () => localStorage.setItem('arch_tools_pro', JSON.stringify(tools.value));
+
+                const exportData = () => {
+                    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(tools.value, null, 2));
+                    const a = document.createElement('a');
+                    a.href = dataStr;
+                    a.download = "nav_pro_backup.json";
+                    a.click();
+                };
+
+                const triggerImport = () => fileInput.value.click();
+
+                const handleFileUpload = (event) => {
+                    const file = event.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const data = JSON.parse(e.target.result);
+                            if (Array.isArray(data) && confirm("确定要导入数据吗？这将覆盖当前所有数据。")) {
+                                tools.value = data;
+                                saveData();
+                                alert("导入成功！");
+                            }
+                        } catch (err) {
+                            alert("解析文件失败。");
+                        }
+                    };
+                    reader.readAsText(file);
+                    event.target.value = '';
+                };
+
+                onMounted(async () => {
+                    // 优先从云端获取数据
+                    const cloudData = await fetchFromCloud();
+                    if (cloudData) {
+                        tools.value = cloudData;
+                    } else {
+                        const saved = localStorage.getItem('arch_tools_pro');
+                        if (saved) tools.value = JSON.parse(saved);
+                        else {
+                            tools.value = [
+                                { id: 1, name: 'GitHub Pro', url: 'https://github.com', username: 'git_master', password: 'gh_token_xxx', notes: '开源项目管理', category: '开发' },
+                                { id: 2, name: '阿里云 ECS', url: 'https://aliyun.com', username: 'root', password: 'aliyun_pass', notes: 'IP: 47.103.xx.xx', category: '工作' }
+                            ];
+                        }
+                    }
+                });
+
+                const selectTool = (tool) => { currentTool.value = tool; searchQuery.value = ''; };
+                const createNew = () => {
+                    const newTool = { id: Date.now(), name: '新资源', url: '', username: '', password: '', notes: '', category: '未分类' };
+                    tools.value.push(newTool);
+                    selectTool(newTool);
+                    isEditing.value = true;
+                    editForm.value = { ...newTool };
+                };
+                const toggleEdit = () => { isEditing.value = !isEditing.value; if (isEditing.value) editForm.value = { ...currentTool.value }; };
+                const saveTool = async () => {
+                    const index = tools.value.findIndex(t => t.id === currentTool.value.id);
+                    if (index !== -1) { tools.value[index] = { ...editForm.value }; currentTool.value = tools.value[index]; }
+                    saveData();
+                    await saveToCloud(tools.value);
+                    isEditing.value = false;
+                };
+                const cancelEdit = () => { isEditing.value = false; };
+                const deleteTool = () => { if (confirm("确定要删除这个资源吗？")) { tools.value = tools.value.filter(t => t.id !== currentTool.value.id); currentTool.value = null; saveData(); } };
+                const copyToClip = (text) => { if (text) navigator.clipboard.writeText(text); };
+                const toggleCategory = (name) => { const idx = expandedCategories.value.indexOf(name); if (idx === -1) expandedCategories.value.push(name); else expandedCategories.value.splice(idx, 1); };
+                
+                return { 
+                    tools, searchQuery, filteredSearchResults, currentTool, isEditing, editForm, expandedCategories, 
+                    categorizedTools, fileInput, 
+                    showCategoryDropdown, categoryNavIndex, filteredCategories,
+                    selectTool, createNew, toggleEdit, saveTool, cancelEdit, deleteTool, copyToClip, toggleCategory, 
+                    exportData, triggerImport, handleFileUpload, saveToCloud,
+                    hideCategoryDropdown, selectCategory, navigateCategory
+                };
+            },
+        }).mount('#app');
+    </script>
+</body>
+</html>
